@@ -26,11 +26,11 @@ struct StorageData {
 }
 const RETRY_DELAY: u64 = 200;
 const RETRY_COUNT: u64 = 5;
-const LOCK_EXPIRY: u64 = 1000;
+const LOCK_EXPIRY: u64 = 30000;
 const OPERATION_A_COST: i64 = 100; // TODO
 const OPERATION_B_COST: i64 = 50; // TODO
 const OPERATION_C_COST: i64 = 0;
-const MEMORY_UNIT_COST: i64 = 31665; // cost per Byte (in 10^-15 $)
+const MEMORY_UNIT_COST: i64 = 31665; // cost per Byte (in 10^-15 $) per hour
 
 pub async fn connect() -> Result<redis::aio::Connection, Box<dyn Error>> {
   let redis_host_name = "127.0.0.1/";
@@ -233,7 +233,7 @@ pub async fn lock(pcr: String, key: &String, conn: &mut redis::aio::Connection) 
   
   for _ in 0..RETRY_COUNT {
     if exists_locked(pcr.clone(), key, conn).await? {
-      sleep(Duration::from_millis(RETRY_DELAY));
+      sleep(Duration::from_millis(RETRY_DELAY)); // TODO: change to async
     } else {
       let val = get_unique_lock_id()?;
       if store_locked(pcr, key, &val, conn).await? {
@@ -394,4 +394,44 @@ mod tests {
     Ok(())
   }
 
+  #[tokio::test]
+  async fn test_store_benchmark() -> Result<(), Box<dyn Error>>{
+    let mut conn = connect().await?;
+    
+    use std::time::Instant;
+    let now = Instant::now();
+    {
+      let mut i = 0;
+      while i < 1000000  {
+        store(String::from("test_store_benchmark_namespace"), &String::from("test_store_benchmark_key"), 1000, &String::from("This is a test value"), &mut conn).await?;
+        i = i+1;
+      }
+    }
+    let elapsed = now.elapsed();
+    println!("test_store_benchmark 1000 calls Elapsed: {:.2?}", elapsed);
+    Ok(())
+  }
+
+  #[tokio::test]
+  async fn test_load_benchmark() -> Result<(), Box<dyn Error>>{
+    let mut conn = connect().await?;
+    let mut i = 0;
+    while i < 10000  {
+      store(String::from("test_load_benchmark_namespace"), &(String::from("test_load_benchmark_key") + &i.to_string()), 100000, &String::from("This is a test value"), &mut conn).await?;
+      i = i+1;
+    }
+
+    use std::time::Instant;
+    let now = Instant::now();
+    {
+      let mut i = 0;
+      while i < 100000  {
+        let _val = load(String::from("test_load_benchmark_namespace"), &String::from("test_load_benchmark_key"), &mut conn).await?;
+        i = i+1;
+      }
+    }
+    let elapsed = now.elapsed();
+    println!("test_store_benchmark 1000 calls Elapsed: {:.2?}", elapsed);
+    Ok(())
+  }
 }
