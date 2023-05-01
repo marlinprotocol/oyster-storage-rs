@@ -1,12 +1,14 @@
 use actix_web::{error, get, post,  web, Responder, Result, HttpRequest, HttpResponse, http::{header::ContentType, StatusCode},};
 use serde::{Serialize, Deserialize};
-use std::sync::Mutex;
-use crate::database;
+use std::{sync::Mutex, collections::HashMap};
+use crate::{database, Config};
 
 use derive_more::{Display, Error};
 
 pub struct AppState {
   pub conn: Mutex<redis::aio::Connection>,
+  pub config: Config,
+  pub cost_map: Mutex::<HashMap<String, i64>>,
 }
 
 #[derive(Debug, Display, Error)]
@@ -58,19 +60,34 @@ pub struct ExistsRequest {
 pub struct ExistsResponse {
     value: bool
 }
-#[post("/load")]
-pub async fn load(state: web::Data<AppState>, body: web::Json<LoadRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("load");
-  let pcr: String;
+
+fn get_pcr(req: &HttpRequest) -> Result<String, UserError> {
   match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
     Ok(value) => {
-      pcr = value.into();
+      return Ok(value.into());
     },
     Err(e) => {
-      println!("error1 {}", e);
       return Err(UserError::ValidationError { field: e.to_string() });
     }
   }
+}
+
+fn update_cost(pcr : String, cost: i64, cost_map: &Mutex::<HashMap<String, i64>>) -> Result<(), UserError> {
+  match cost_map.lock() {
+    Ok(mut map) => {
+      *map.entry(pcr).or_default() += cost;
+      //println!("cost updated: {}", *map.entry(pcr).or_default());
+      return Ok(());
+    },
+    Err(_) => {
+      return Err(UserError::InternalServerError);
+    }
+  };
+}
+
+#[post("/load")]
+pub async fn load(state: web::Data<AppState>, body: web::Json<LoadRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
+  let pcr: String = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -82,12 +99,12 @@ pub async fn load(state: web::Data<AppState>, body: web::Json<LoadRequest>, req:
     }
   };
 
-  match database::load(String::from(pcr), &body.key, &mut conn).await {
+  match database::load(pcr.to_owned(), &body.key, &mut conn, &state.config).await {
     Ok(value) => {
+      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
       let resp = LoadResponse {
         value: value.0,
       };
-      println!("no error {}", resp.value);
       return Ok(web::Json(resp));
     },
     Err(e) => {
@@ -108,16 +125,7 @@ pub async fn ping() -> Result<impl Responder, UserError> {
 
 #[post("/store")]
 pub async fn store(state: web::Data<AppState>, body: web::Json<StoreRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("store");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -128,8 +136,9 @@ pub async fn store(state: web::Data<AppState>, body: web::Json<StoreRequest>, re
     }
   };
 
-  match database::store(String::from(pcr), &body.key, body.expiry, &body.value, &mut *conn).await {
-    Ok(_) => {
+  match database::store(pcr.to_owned(), &body.key, body.expiry, &body.value, &mut *conn, &state.config).await {
+    Ok(value) => {
+      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
       return Ok(HttpResponse::Ok().finish());
     },
     Err(_) => {
@@ -140,16 +149,7 @@ pub async fn store(state: web::Data<AppState>, body: web::Json<StoreRequest>, re
 
 #[post("/exists")]
 pub async fn exists(state: web::Data<AppState>, body: web::Json<ExistsRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("exists");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -160,9 +160,9 @@ pub async fn exists(state: web::Data<AppState>, body: web::Json<ExistsRequest>, 
     }
   };
 
-  match database::exists(String::from(pcr), &body.key, &mut *conn).await {
+  match database::exists(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
     Ok(value) => {
-      
+      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
       let resp = ExistsResponse {
         value: value.0,
       };
@@ -186,16 +186,7 @@ pub struct ListResponse {
 
 #[post("/list")]
 pub async fn list(state: web::Data<AppState>, body: web::Json<ListRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("list");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -206,9 +197,9 @@ pub async fn list(state: web::Data<AppState>, body: web::Json<ListRequest>, req:
     }
   };
 
-  match database::list(String::from(pcr), &body.prefix, body.is_recursive, &mut *conn).await {
+  match database::list(pcr.to_owned(), &body.prefix, body.is_recursive, &mut *conn, &state.config).await {
     Ok(value) => {
-      
+      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
       let resp = ListResponse {
         keys_list: value.0,
       };
@@ -227,16 +218,7 @@ pub struct StatRequest {
 
 #[post("/stat")]
 pub async fn stat(state: web::Data<AppState>, body: web::Json<StatRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("stat");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -247,8 +229,9 @@ pub async fn stat(state: web::Data<AppState>, body: web::Json<StatRequest>, req:
       }
   };
 
-  match database::stat(String::from(pcr), &body.key, &mut *conn).await {
+  match database::stat(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
     Ok(value) => {
+      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
       return Ok(web::Json(value.0));
     },
     Err(_) => {
@@ -266,16 +249,7 @@ pub struct DeleteRequest {
 
 #[post("/delete")]
 pub async fn delete(state: web::Data<AppState>, body: web::Json<DeleteRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("delete");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -286,8 +260,9 @@ pub async fn delete(state: web::Data<AppState>, body: web::Json<DeleteRequest>, 
       }
   };
 
-  match database::delete(String::from(pcr), &body.key, &mut *conn).await {
-    Ok(_) => {
+  match database::delete(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
+    Ok(value) => {
+      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
       return Ok(HttpResponse::Ok().finish());
     },
     Err(_) => {
@@ -306,16 +281,7 @@ pub struct LockResponse {
 }
 #[post("/lock")]
 pub async fn lock(state: web::Data<AppState>, body: web::Json<LockRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("lock");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -326,9 +292,9 @@ pub async fn lock(state: web::Data<AppState>, body: web::Json<LockRequest>, req:
       }
   };
 
-  match database::lock(String::from(pcr), &body.key, &mut *conn).await {
+  match database::lock(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
     Ok(value) => {
-
+      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
       let resp = LockResponse {
         lock_id: value.0,
       };
@@ -348,16 +314,7 @@ pub struct UnlockRequest {
 
 #[post("/unlock")]
 pub async fn unlock(state: web::Data<AppState>, body: web::Json<UnlockRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  println!("unlock");
-  let pcr: String;
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      pcr = value.into();
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
-    }
-  }
+  let pcr = get_pcr(&req)?;
   let mut conn;
   match state.conn.lock() {
     Ok(connection) => {
@@ -368,8 +325,9 @@ pub async fn unlock(state: web::Data<AppState>, body: web::Json<UnlockRequest>, 
       }
   };
 
-  match database::unlock(String::from(pcr), &body.key, &body.lock_id, &mut *conn).await {
-    Ok(_) => {
+  match database::unlock(pcr.to_owned(), &body.key, &body.lock_id, &mut *conn, &state.config).await {
+    Ok(value) => {
+      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
       return Ok(HttpResponse::Ok().finish());
     },
     Err(_) => {

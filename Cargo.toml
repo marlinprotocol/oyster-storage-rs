@@ -15,4 +15,6 @@ futures = "0.3.28"
 tokio = { version = "1.27.0", features = ["full"] }
 actix-web = "4"
 derive_more = "0.99.0"
+confy = "0.5.1"
+serde_derive = "1.0.160"
 
