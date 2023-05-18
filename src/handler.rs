@@ -1,4 +1,4 @@
-use crate::{Context, Response, router::IntoResponse};
+use crate::{Context, Response};
 use std::{collections::HashMap};
 use serde::{Serialize, Deserialize};
 use hyper::StatusCode;
@@ -10,11 +10,6 @@ pub struct AppState {
     pub config: Config,
     pub cost_map: Mutex<HashMap<String, i64>>,
 }
-
-pub async fn test_handler(ctx: Context) -> String {
-    format!("test called, state_thing was: ")
-}
-
 #[derive(Serialize)]
 pub struct PingResponse {
     version: String
@@ -106,7 +101,7 @@ where
                 .header("Content-Type", "application/json")
                 .body(v.into()).unwrap_or(internal_server_error());
         },
-        Err(e) => {
+        Err(_) => {
             return internal_server_error();
         }
     }
@@ -139,8 +134,7 @@ async fn update_cost(pcr : String, cost: i64, cost_map: &Mutex<HashMap<String, i
 		// };
 }
 
-pub async fn ping(ctx: Context) -> Response {
-  println!("pong");
+pub async fn ping(_ctx: Context) -> Response {
   let resp = PingResponse {
     version: "0.0.1".into(),
   };
@@ -388,38 +382,5 @@ pub async fn unlock(mut ctx: Context) -> Response {
     }
   };
 	update_cost(pcr, unlock_result, &ctx.state.cost_map).await;
-  return Response::default();
-}
-#[derive(Deserialize)]
-struct SendRequest {
-    name: String,
-    active: bool,
-}
-
-pub async fn send_handler(mut ctx: Context) -> Response {
-    let body: SendRequest = match ctx.body_json().await {
-        Ok(v) => v,
-        Err(e) => {
-            return hyper::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(format!("could not parse JSON: {}", e).into())
-                .unwrap()
-        }
-    };
-
-    Response::new(
-        format!(
-            "send called with name: {} and active: {}",
-            body.name, body.active
-        )
-        .into(),
-    )
-}
-
-pub async fn param_handler(ctx: Context) -> String {
-    let param = match ctx.params.find("some_param") {
-        Some(v) => v,
-        None => "empty",
-    };
-    format!("param called, param was: {}", param)
+  return Response::default()
 }

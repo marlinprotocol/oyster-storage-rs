@@ -1,5 +1,4 @@
 // use actix_web::dev::AppService;
-use actix_web::web::Data;
 use std::collections::HashMap;
 use std::{error::Error};
 use tokio::net::TcpListener;
@@ -49,24 +48,19 @@ impl ::std::default::Default for Config {
 
 
 pub struct Context {
-    pub state: Data<handler::AppState>,
+    pub state: Arc<handler::AppState>,
     pub req: Request<Body>,
     pub params: Params,
     //body_bytes: Option<Bytes>,
 }
-
-async fn hello(_req: Request<Body>) -> Result<http::Response<Body>, std::convert::Infallible> {
-    println!("server: hello");
-    Ok(Response::new(Body::from("Hello World!")))
-}
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>>{
     let key = [0u8; 64];
     let config: Config = confy::load_path("./config.toml")?;
     let conn = database::connect().await?;
     let cost_map: HashMap<String, i64> = HashMap::new();
-    let server = TcpListener::bind("127.0.0.1:2100").await?;
-    let app_state = Data::new(handler::AppState{
+    let server = TcpListener::bind("127.0.0.1:8080").await?;
+    let app_state = Arc::new(handler::AppState{
         conn: Mutex::new(conn),
         config: config,
         cost_map: Mutex::new(cost_map),
@@ -81,14 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>>{
     router.post("/delete", Box::new(handler::delete));
     router.post("/lock", Box::new(handler::lock));
     router.post("/unlock", Box::new(handler::unlock));
-    router.get("/test", Box::new(handler::test_handler));
-    router.post("/send", Box::new(handler::send_handler));
-    router.get("/params/:some_param", Box::new(handler::param_handler));
 
-    // let addr = "127.0.0.1:2100".parse().expect("address creation works");
-    // let server = hyper::Server::bind(&addr).serve(new_service);
-    // println!("Listening on http://{}", addr);
-    // let _ = server.await;
+
     let shared_router = Arc::new(router);
     loop {
         let (stream, _) = server.accept().await?;
@@ -110,13 +98,12 @@ async fn main() -> Result<(), Box<dyn Error>>{
             }
         });
     }
-    Ok(())
 }
 
 async fn route(
     router: Arc<Router>,
     req: Request<hyper::Body>,
-    app_state: Data<handler::AppState>,
+    app_state: Arc<handler::AppState>,
 ) -> Result<Response, Box<dyn std::error::Error + Send + Sync + 'static>> {
     let found_handler = router.route(req.uri().path(), req.method());
     let resp = found_handler
@@ -127,7 +114,7 @@ async fn route(
 }
 
 impl Context {
-    pub fn new(state: Data<handler::AppState>, req: Request<Body>, params: Params) -> Context {
+    pub fn new(state: Arc<handler::AppState>, req: Request<Body>, params: Params) -> Context {
         Context {
             state,
             req,
