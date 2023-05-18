@@ -81,7 +81,7 @@ fn get_pcr(req: &http::Request<hyper::body::Body>) -> Result<String, Box<dyn Err
     }
 }
 
-async fn update_cost(pcr : String, cost: i64, cost_map: &Mutex::<HashMap<String, i64>>) {
+async fn update_cost(pcr : String, cost: i64, cost_map: &Mutex<HashMap<String, i64> >) {
     let mut map = cost_map.lock().await;
     *map.entry(pcr.to_owned()).or_default() += cost;
 
@@ -121,49 +121,49 @@ pub async fn load(mut ctx: Context) -> Response {
         }
     };
 		let mut conn = ctx.state.conn.lock().await;
-		
-		match database::load(pcr.to_owned(), &body.key, &mut conn, &ctx.state.config).await {
+		let load_result = match database::load(pcr.to_owned(), &body.key, &mut conn, &ctx.state.config).await {
 			Ok(value) => {
-				update_cost(pcr, value.1, &ctx.state.cost_map);
-				let resp = LoadResponse {
-					value: value.0,
-				};
-				return json_response(&resp);
+				value
 			},
-			Err(e) => {
+			Err(_) => {
 				return internal_server_error();
 			}
 		};
+		update_cost(pcr, load_result.1, &ctx.state.cost_map).await;
+		let resp = LoadResponse {
+			value: load_result.0,
+		};
+		return json_response(&resp);
 }
 
 
-// pub async fn store(mut ctx: Context) -> Response {
-//     let body: StoreRequest = match ctx.body_json().await {
-//         Ok(v) => v,
-//         Err(e) => {
-//             return bad_request_response(e);
-//         }
-//     };
-
-// 		let pcr = 
-//     match get_pcr(&ctx.req) {
-//         Ok(v) => {
-//             v
-//         },
-//         Err(e) => {
-//             return bad_request_response(e);
-//         }
-//     };
-//     match database::store(pcr.to_owned(), &body.key, body.expiry, &body.value, &mut ctx.state.conn, &ctx.state.config).await {
-// 			Ok(value) => {
-// 				update_cost(pcr, value, ctx.state.cost_map);
-// 				return Response::default();
-// 			},
-// 			Err(_) => {
-// 				return internal_server_error();
-// 			}
-// 		};
-//   }
+pub async fn store(mut ctx: Context) -> Response {
+    let body: StoreRequest = match ctx.body_json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return bad_request_response(e);
+        }
+    };
+		let pcr = match get_pcr(&ctx.req) {
+			Ok(v) => {
+					v
+			},
+			Err(e) => {
+					return bad_request_response(e);
+			}
+	};
+	let mut conn = ctx.state.conn.lock().await;
+	let cost = match database::store(pcr.to_owned(), &body.key, body.expiry, &body.value, &mut conn, &ctx.state.config).await {
+			Ok(value) => {
+				value
+			},
+			Err(_) => {
+				return internal_server_error();
+			}
+	};
+	update_cost(pcr, cost, &ctx.state.cost_map).await;
+	return Response::default();
+}
 
 #[derive(Deserialize)]
 struct SendRequest {
