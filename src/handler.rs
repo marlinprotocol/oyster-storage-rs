@@ -1,37 +1,24 @@
-use actix_web::{error, get, post,  web, Responder, Result, HttpRequest, HttpResponse, http::{header::ContentType, StatusCode},};
+use crate::{Context, Response, router::IntoResponse};
+use std::{collections::HashMap};
 use serde::{Serialize, Deserialize};
-use std::{sync::Mutex, collections::HashMap};
+use hyper::StatusCode;
+use std::{error::Error};
 use crate::{database, Config};
-
-use derive_more::{Display, Error};
-
+use tokio::sync::Mutex;
 pub struct AppState {
-  pub conn: Mutex<redis::aio::Connection>,
-  pub config: Config,
-  pub cost_map: Mutex::<HashMap<String, i64>>,
+    pub conn: Mutex<redis::aio::Connection>,
+    pub config: Config,
+    pub cost_map: Mutex<HashMap<String, i64>>,
 }
 
-#[derive(Debug, Display, Error)]
-pub enum UserError {
-    #[display(fmt = "Validation error on field: {}", field)]
-    ValidationError { field: String },
-    InternalServerError,
+pub async fn test_handler(ctx: Context) -> String {
+    format!("test called, state_thing was: ")
 }
 
-impl error::ResponseError for UserError {
-    fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.status_code())
-            .insert_header(ContentType::html())
-            .body(self.to_string())
-    }
-    fn status_code(&self) -> StatusCode {
-        match *self {
-            UserError::ValidationError { .. } => StatusCode::BAD_REQUEST,
-            UserError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
+#[derive(Serialize)]
+pub struct PingResponse {
+    version: String
 }
-
 #[derive(Deserialize)]
 pub struct LoadRequest {
     key: String
@@ -47,291 +34,167 @@ pub struct StoreRequest {
     value: String,
     expiry: i64
 }
-#[derive(Serialize)]
-pub struct PingResponse {
-    version: String
+
+fn internal_server_error() -> Response {
+    let mut resp = Response::default();
+    *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    return resp;
 }
 
-#[derive(Deserialize)]
-pub struct ExistsRequest {
-    key: String
-}
-#[derive(Serialize)]
-pub struct ExistsResponse {
-    value: bool
+fn bad_request_error() -> Response {
+    let mut resp = Response::default();
+    *resp.status_mut() = StatusCode::BAD_REQUEST;
+    return resp;
 }
 
-fn get_pcr(req: &HttpRequest) -> Result<String, UserError> {
-  match req.headers().get("pcr").ok_or(UserError::ValidationError { field: "pcr".into() })?.to_str() {
-    Ok(value) => {
-      return Ok(value.into());
-    },
-    Err(e) => {
-      return Err(UserError::ValidationError { field: e.to_string() });
+fn bad_request_response(e: Box<dyn Error>) -> Response {
+    hyper::Response::builder()
+    .status(StatusCode::BAD_REQUEST)
+    .body(format!("could not parse JSON: {}", e).into())
+    .unwrap_or(bad_request_error())
+}
+
+fn json_response<T>(val: &T) -> Response
+where
+    T: ?Sized + Serialize,
+{
+    match serde_json::to_string(val) {
+        Ok(v) => {
+            return hyper::Response::builder()
+                .header("Content-Type", "application/json")
+                .body(v.into()).unwrap_or(internal_server_error());
+        },
+        Err(e) => {
+            return internal_server_error();
+        }
     }
-  }
 }
 
-fn update_cost(pcr : String, cost: i64, cost_map: &Mutex::<HashMap<String, i64>>) -> Result<(), UserError> {
-  match cost_map.lock() {
-    Ok(mut map) => {
-      *map.entry(pcr).or_default() += cost;
-      //println!("cost updated: {}", *map.entry(pcr).or_default());
-      return Ok(());
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
+fn get_pcr(req: &http::Request<hyper::body::Body>) -> Result<String, Box<dyn Error>> {
+    match req.headers().get("pcr").ok_or( Err("pcr not found".into())) {
+      Ok(value) => {
+        return Ok(String::from(value.to_str()?));
+      },
+      Err(e) => {
+        return e;
+      }
     }
-  };
 }
 
-#[post("/load")]
-pub async fn load(state: web::Data<AppState>, body: web::Json<LoadRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr: String = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-    },
-    Err(e) => {
-      println!("error2 {}", e);
-      return Err(UserError::InternalServerError);
-    }
-  };
+async fn update_cost(pcr : String, cost: i64, cost_map: &Mutex::<HashMap<String, i64>>) {
+    let mut map = cost_map.lock().await;
+    *map.entry(pcr.to_owned()).or_default() += cost;
 
-  match database::load(pcr.to_owned(), &body.key, &mut conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
-      let resp = LoadResponse {
-        value: value.0,
-      };
-      return Ok(web::Json(resp));
-    },
-    Err(e) => {
-      println!("error3 {}", e);
-      return Err(UserError::InternalServerError);
-    }
-  };
+		// match cost_map.lock() {
+		// 	Ok(mut map) => {
+		// 		*map.entry(pcr.to_owned()).or_default() += cost;
+		// 		println!("cost updated: {}", *map.entry(pcr).or_default());
+		// 		return Ok(());
+		// 	},
+		// 	Err(e) => {
+		// 		return Err(e.to_string().into());
+		// 	}
+		// };
 }
 
-#[get("/ping")]
-pub async fn ping() -> Result<impl Responder, UserError> {
+pub async fn ping(ctx: Context) -> Response {
   println!("pong");
   let resp = PingResponse {
     version: "0.0.1".into(),
   };
-  Ok(web::Json(resp))
+  return json_response(&resp);
 }
 
-#[post("/store")]
-pub async fn store(state: web::Data<AppState>, body: web::Json<StoreRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
-
-  match database::store(pcr.to_owned(), &body.key, body.expiry, &body.value, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
-      return Ok(HttpResponse::Ok().finish());
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
+pub async fn load(mut ctx: Context) -> Response {
+    let body: LoadRequest = match ctx.body_json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return bad_request_response(e);
+        }
+    };
+		let pcr = match get_pcr(&ctx.req) {
+        Ok(v) => {
+            v
+        },
+        Err(e) => {
+            return bad_request_response(e);
+        }
+    };
+		let mut conn = ctx.state.conn.lock().await;
+		
+		match database::load(pcr.to_owned(), &body.key, &mut conn, &ctx.state.config).await {
+			Ok(value) => {
+				update_cost(pcr, value.1, &ctx.state.cost_map);
+				let resp = LoadResponse {
+					value: value.0,
+				};
+				return json_response(&resp);
+			},
+			Err(e) => {
+				return internal_server_error();
+			}
+		};
 }
 
-#[post("/exists")]
-pub async fn exists(state: web::Data<AppState>, body: web::Json<ExistsRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
 
-  match database::exists(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
-      let resp = ExistsResponse {
-        value: value.0,
-      };
-      return Ok(web::Json(resp));
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
-}
+// pub async fn store(mut ctx: Context) -> Response {
+//     let body: StoreRequest = match ctx.body_json().await {
+//         Ok(v) => v,
+//         Err(e) => {
+//             return bad_request_response(e);
+//         }
+//     };
+
+// 		let pcr = 
+//     match get_pcr(&ctx.req) {
+//         Ok(v) => {
+//             v
+//         },
+//         Err(e) => {
+//             return bad_request_response(e);
+//         }
+//     };
+//     match database::store(pcr.to_owned(), &body.key, body.expiry, &body.value, &mut ctx.state.conn, &ctx.state.config).await {
+// 			Ok(value) => {
+// 				update_cost(pcr, value, ctx.state.cost_map);
+// 				return Response::default();
+// 			},
+// 			Err(_) => {
+// 				return internal_server_error();
+// 			}
+// 		};
+//   }
 
 #[derive(Deserialize)]
-pub struct ListRequest {
-    prefix: String,
-    is_recursive: bool
-}
-#[derive(Serialize)]
-pub struct ListResponse {
-    keys_list: Vec<String>
+struct SendRequest {
+    name: String,
+    active: bool,
 }
 
-#[post("/list")]
-pub async fn list(state: web::Data<AppState>, body: web::Json<ListRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
+pub async fn send_handler(mut ctx: Context) -> Response {
+    let body: SendRequest = match ctx.body_json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return hyper::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(format!("could not parse JSON: {}", e).into())
+                .unwrap()
+        }
+    };
 
-  match database::list(pcr.to_owned(), &body.prefix, body.is_recursive, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
-      let resp = ListResponse {
-        keys_list: value.0,
-      };
-      return Ok(web::Json(resp));
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
+    Response::new(
+        format!(
+            "send called with name: {} and active: {}",
+            body.name, body.active
+        )
+        .into(),
+    )
 }
 
-#[derive(Deserialize)]
-pub struct StatRequest {
-    key: String
-}
-
-#[post("/stat")]
-pub async fn stat(state: web::Data<AppState>, body: web::Json<StatRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-      },
-      Err(_) => {
-        return Err(UserError::InternalServerError);
-      }
-  };
-
-  match database::stat(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
-      return Ok(web::Json(value.0));
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
-}
-
-
-
-#[derive(Deserialize)]
-pub struct DeleteRequest {
-  key: String
-}
-
-#[post("/delete")]
-pub async fn delete(state: web::Data<AppState>, body: web::Json<DeleteRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-      },
-      Err(_) => {
-        return Err(UserError::InternalServerError);
-      }
-  };
-
-  match database::delete(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
-      return Ok(HttpResponse::Ok().finish());
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
-}
-
-#[derive(Deserialize)]
-pub struct LockRequest {
-    key: String
-}
-#[derive(Serialize)]
-pub struct LockResponse {
-    lock_id: Vec<u8>
-}
-#[post("/lock")]
-pub async fn lock(state: web::Data<AppState>, body: web::Json<LockRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-      },
-      Err(_) => {
-        return Err(UserError::InternalServerError);
-      }
-  };
-
-  match database::lock(pcr.to_owned(), &body.key, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value.1, &state.cost_map).unwrap_or_default();
-      let resp = LockResponse {
-        lock_id: value.0,
-      };
-      return Ok(web::Json(resp));
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
-}
-
-#[derive(Deserialize)]
-pub struct UnlockRequest {
-    key: String,
-    lock_id: Vec<u8>
-}
-
-#[post("/unlock")]
-pub async fn unlock(state: web::Data<AppState>, body: web::Json<UnlockRequest>, req: HttpRequest) -> Result<impl Responder, UserError> {
-  let pcr = get_pcr(&req)?;
-  let mut conn;
-  match state.conn.lock() {
-    Ok(connection) => {
-      conn = connection;
-      },
-      Err(_) => {
-        return Err(UserError::InternalServerError);
-      }
-  };
-
-  match database::unlock(pcr.to_owned(), &body.key, &body.lock_id, &mut *conn, &state.config).await {
-    Ok(value) => {
-      update_cost(pcr, value, &state.cost_map).unwrap_or_default();
-      return Ok(HttpResponse::Ok().finish());
-    },
-    Err(_) => {
-      return Err(UserError::InternalServerError);
-    }
-  };
+pub async fn param_handler(ctx: Context) -> String {
+    let param = match ctx.params.find("some_param") {
+        Some(v) => v,
+        None => "empty",
+    };
+    format!("param called, param was: {}", param)
 }
