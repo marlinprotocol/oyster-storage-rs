@@ -35,6 +35,48 @@ pub struct StoreRequest {
     expiry: i64
 }
 
+#[derive(Deserialize)]
+pub struct ExistsRequest {
+    key: String
+}
+#[derive(Serialize)]
+pub struct ExistsResponse {
+    value: bool
+}
+
+#[derive(Deserialize)]
+pub struct ListRequest {
+    prefix: String,
+    is_recursive: bool
+}
+#[derive(Serialize)]
+pub struct ListResponse {
+    keys_list: Vec<String>
+}
+#[derive(Deserialize)]
+pub struct StatRequest {
+    key: String
+}
+
+#[derive(Deserialize)]
+pub struct DeleteRequest {
+  key: String
+}
+#[derive(Deserialize)]
+pub struct LockRequest {
+    key: String
+}
+#[derive(Serialize)]
+pub struct LockResponse {
+    lock_id: Vec<u8>
+}
+
+#[derive(Deserialize)]
+pub struct UnlockRequest {
+    key: String,
+    lock_id: Vec<u8>
+}
+
 fn internal_server_error() -> Response {
     let mut resp = Response::default();
     *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
@@ -165,6 +207,189 @@ pub async fn store(mut ctx: Context) -> Response {
 	return Response::default();
 }
 
+pub async fn exists(mut ctx: Context) -> Response {
+	let body: ExistsRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+  let exists_result = match database::exists(pcr.to_owned(), &body.key, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+			value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, exists_result.1, &ctx.state.cost_map).await;
+  let resp = ExistsResponse {
+    value: exists_result.0,
+  };
+  return json_response(&resp);
+}
+
+pub async fn list(mut ctx: Context) -> Response {
+	let body: ListRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+  let list_result = match database::list(pcr.to_owned(), &body.prefix, body.is_recursive, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+      value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, list_result.1, &ctx.state.cost_map).await;
+      let resp = ListResponse {
+        keys_list: list_result.0,
+      };
+  return json_response(&resp);
+}
+
+pub async fn stat(mut ctx: Context) -> Response {
+	let body: StatRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+  let stat_result = match database::stat(pcr.to_owned(), &body.key, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+      value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, stat_result.1, &ctx.state.cost_map).await;
+  return json_response(&stat_result.0);
+}
+
+pub async fn delete(mut ctx: Context) -> Response {
+  let body: DeleteRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+  let delete_result = match database::delete(pcr.to_owned(), &body.key, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+      value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, delete_result, &ctx.state.cost_map).await;
+  return Response::default();
+}
+
+pub async fn lock(mut ctx: Context) -> Response {
+  let body: LockRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+  let lock_result = match database::lock(pcr.to_owned(), &body.key, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+      value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, lock_result.1, &ctx.state.cost_map).await;
+      let resp = LockResponse {
+        lock_id: lock_result.0,
+      };
+      return json_response(&resp);
+}
+
+pub async fn unlock(mut ctx: Context) -> Response {
+  let body: UnlockRequest = match ctx.body_json().await {
+		Ok(v) => v,
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let pcr = match get_pcr(&ctx.req) {
+		Ok(v) => {
+				v
+		},
+		Err(e) => {
+				return bad_request_response(e);
+		}
+	};
+  let mut conn = ctx.state.conn.lock().await;
+
+
+  let unlock_result = match database::unlock(pcr.to_owned(), &body.key, &body.lock_id, &mut *conn, &ctx.state.config).await {
+    Ok(value) => {
+      value
+    },
+    Err(_) => {
+      return internal_server_error();
+    }
+  };
+	update_cost(pcr, unlock_result, &ctx.state.cost_map).await;
+  return Response::default();
+}
 #[derive(Deserialize)]
 struct SendRequest {
     name: String,

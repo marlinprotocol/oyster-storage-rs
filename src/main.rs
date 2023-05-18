@@ -73,8 +73,14 @@ async fn main() -> Result<(), Box<dyn Error>>{
     });
     let mut router: router::Router = router::Router::new();
     router.get("/ping", Box::new(handler::ping));
-    router.get("/load", Box::new(handler::load));
-    //router.get("/store", Box::new(handler::store));
+    router.post("/load", Box::new(handler::load));
+    router.post("/store", Box::new(handler::store));
+    router.post("/exists", Box::new(handler::exists));
+    router.post("/list", Box::new(handler::list));
+    router.post("/stat", Box::new(handler::stat));
+    router.post("/delete", Box::new(handler::delete));
+    router.post("/lock", Box::new(handler::lock));
+    router.post("/unlock", Box::new(handler::unlock));
     router.get("/test", Box::new(handler::test_handler));
     router.post("/send", Box::new(handler::send_handler));
     router.get("/params/:some_param", Box::new(handler::param_handler));
@@ -87,7 +93,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
     loop {
         let (stream, _) = server.accept().await?;
         let router_capture = shared_router.clone();
-        let ss: MolluskStream = MolluskStream::new_server(stream, key).await?;
+        //let ss: MolluskStream = MolluskStream::new_server(stream, key).await?;
         let app_state = app_state.clone();
         //println!("{:?}", ss);
 
@@ -95,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
             if let Err(http_err) = Http::new()
                 .http1_only(true)
                 .http1_keep_alive(true)
-                .serve_connection(ss, service_fn(move |req| {
+                .serve_connection(stream, service_fn(move |req| {
                     route(router_capture.clone(), req, app_state.clone())
                 }))
                 .await
