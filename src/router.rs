@@ -2,7 +2,7 @@ use crate::{Context, Response};
 use async_trait::async_trait;
 use futures::future::Future;
 use hyper::{Method, StatusCode};
-use route_recognizer::{ Params, Router as InternalRouter};
+use route_recognizer::{Params, Router as InternalRouter};
 use std::collections::HashMap;
 
 #[async_trait]
