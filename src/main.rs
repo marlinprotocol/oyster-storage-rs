@@ -51,11 +51,11 @@ pub struct Context {
     pub state: Arc<handler::AppState>,
     pub req: Request<Body>,
     pub params: Params,
-    //body_bytes: Option<Bytes>,
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>>{
-    let key = [0u8; 64];
+    let args: Vec<String> = std::env::args().collect();
+    let key: [u8; 64] = std::fs::read(&args[1])?.try_into().unwrap();
     let config: Config = confy::load_path("./config.toml")?;
     let conn = database::connect().await?;
     let cost_map: HashMap<String, i64> = HashMap::new();
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
     loop {
         let (stream, _) = server.accept().await?;
         let router_capture = shared_router.clone();
-        //let ss: MolluskStream = MolluskStream::new_server(stream, key).await?;
+        let ss: MolluskStream = MolluskStream::new_server(stream, key).await?;
         let app_state = app_state.clone();
         //println!("{:?}", ss);
 
@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
             if let Err(http_err) = Http::new()
                 .http1_only(true)
                 .http1_keep_alive(true)
-                .serve_connection(stream, service_fn(move |req| {
+                .serve_connection(ss, service_fn(move |req| {
                     route(router_capture.clone(), req, app_state.clone())
                 }))
                 .await
@@ -119,22 +119,10 @@ impl Context {
             state,
             req,
             params,
-            //body_bytes: None,
         }
     }
-
     pub async fn body_json<T: serde::de::DeserializeOwned>(&mut self) -> Result<T, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let body = to_bytes(self.req.body_mut()).await?;
         Ok(serde_json::from_slice(&body)?)
-
-        // let body_bytes = match self.body_bytes {
-        //     Some(ref v) => v,
-        //     _ => {
-        //         let body = to_bytes(self.req.body_mut()).await?;
-        //         self.body_bytes = Some(body);
-        //         self.body_bytes.as_ref().expect("body_bytes was set above")
-        //     }
-        // };
-        
     }
 }
