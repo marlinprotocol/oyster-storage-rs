@@ -76,20 +76,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         let (stream, _) = server.accept().await?;
         let router_capture = shared_router.clone();
-        let ss: MolluskStream = MolluskStream::new_server(stream, key).await?;
         let app_state = app_state.clone();
 
         tokio::task::spawn(async move {
-            if let Err(http_err) = Http::new()
-                .http1_only(true)
-                .http1_keep_alive(true)
-                .serve_connection(
-                    ss,
-                    service_fn(move |req| route(router_capture.clone(), req, app_state.clone())),
-                )
-                .await
-            {
-                eprintln!("Error while serving HTTP connection: {}", http_err);
+            match MolluskStream::new_server(stream, key).await {
+                Ok(ss) => {
+                    if let Err(http_err) = Http::new()
+                        .http1_only(true)
+                        .http1_keep_alive(true)
+                        .serve_connection(
+                            ss,
+                            service_fn(move |req| {
+                                route(router_capture.clone(), req, app_state.clone())
+                            }),
+                        )
+                        .await
+                    {
+                        eprintln!("Error while serving HTTP connection: {}", http_err);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error while serving HTTP connection: {}", e);
+                }
             }
         });
     }
