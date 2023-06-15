@@ -23,4 +23,7 @@ bytes = "1.4"
 async-trait = "0.1.68"
 http = "0.2.9"
 oyster-sdk = { git = "https://github.com/marlinprotocol/oyster-sdk-rs.git" }
+url = "2.4.0"
+hyper-tls = "0.5.0"
+base64 = "0.21.2"
 

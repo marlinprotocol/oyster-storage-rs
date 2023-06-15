@@ -14,6 +14,7 @@ use router::Router;
 use oyster::MolluskStream;
 mod database;
 mod handler;
+mod ipfs;
 mod router;
 type Response = hyper::Response<hyper::Body>;
 
@@ -26,6 +27,10 @@ pub struct Config {
     operation_b_cost: i64,
     operation_c_cost: i64,
     memory_cost: i64,
+    ipfs_url: String,
+    mem_threshold: usize,
+    ipfs_key: String,
+    ipfs_secret: String,
 }
 
 /// `Config` implements `Default`
@@ -39,6 +44,10 @@ impl ::std::default::Default for Config {
             operation_b_cost: 3527500,  // (in 10^-15 $) store, load, stat
             operation_c_cost: 1763750,  // (in 10^-15 $) exists
             memory_cost: 879583,
+            ipfs_url: "".to_string(),
+            mem_threshold: 1000, // in bytes
+            ipfs_key: "".to_string(),
+            ipfs_secret: "".to_string(),
         }
     } // cost per Byte per millisecond (in 10^-23 $)
 }

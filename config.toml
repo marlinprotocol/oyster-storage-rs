@@ -5,3 +5,7 @@ operation_a_cost = 17637500000 # (in 10^-18 $) list
 operation_b_cost = 3527500000 # (in 10^-18 $) lock, unlock
 operation_c_cost = 1763750000 # (in 10^-18 $) store, load, stat, exists
 memory_cost = 8796 # cost per Byte per second (in 10^-18 $)
+ipfs_url = "https://ipfs.infura.io:5001/api/v0/"
+ipfs_key = "infura_key"
+ipfs_secret = "infura_secret"
+mem_threshold = 1000

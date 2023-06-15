@@ -9,8 +9,7 @@ use std::io::{self, Read};
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::Config;
-
+use crate::{ipfs, Config};
 //use rslock::LockManager;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct KeyInfo {
@@ -24,6 +23,7 @@ pub struct KeyInfo {
 struct StorageData {
     value: String,
     modified: i64,
+    ipfs: bool,
 }
 
 pub async fn connect() -> Result<redis::aio::Connection, Box<dyn Error>> {
@@ -47,7 +47,10 @@ pub async fn load(
     let key = get_namespaced_key(&pcr, key);
     let value: String = redis::cmd("GET").arg(key).query_async(conn).await?;
 
-    let value: StorageData = serde_json::from_str(&String::from(value))?;
+    let mut value: StorageData = serde_json::from_str(&String::from(value))?;
+    if value.ipfs {
+        value.value = ipfs::get(value.value, config).await?;
+    }
     Ok((value.value, config.operation_c_cost))
 }
 
@@ -71,10 +74,15 @@ pub async fn store(
     config: &Config,
 ) -> Result<i64, Box<dyn Error>> {
     let key = get_namespaced_key(&pcr, key);
-    let data = StorageData {
+    let mut data = StorageData {
+        ipfs: false,
         value: String::from(value),
         modified: Utc::now().timestamp_millis(),
     };
+    if value.len() > config.mem_threshold {
+        data.value = ipfs::add(value.to_string(), config).await?;
+        data.ipfs = true;
+    }
     let value = serde_json::to_string(&data)?;
     let mut cost = value.len() as i64;
     if exp > 0 {
@@ -130,6 +138,16 @@ pub async fn delete(
     config: &Config,
 ) -> Result<i64, Box<dyn Error>> {
     let key = get_namespaced_key(&pcr, key);
+    let value: String = redis::cmd("GET")
+        .arg(key.to_string())
+        .query_async(conn)
+        .await?;
+    if value.len() > 0 {
+        let value: StorageData = serde_json::from_str(&String::from(value))?;
+        if value.ipfs {
+            ipfs::delete(value.value, config).await?;
+        }
+    }
     redis::cmd("DEL").arg(key).query_async(conn).await?;
     Ok(config.operation_c_cost)
 }
